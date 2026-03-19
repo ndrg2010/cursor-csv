@@ -1,0 +1,146 @@
+[
+  {
+    "id": 1,
+    "title": "Orphaned session on createSessionFromFile error",
+    "severity": "HIGH",
+    "file": "src/services/session-manager.js",
+    "description": "When #importCsv throws (e.g., file not found, malformed CSV, DuckDB error), the session remains in #sessions with status 'preparing'. It counts toward maxConcurrentSessions until TTL expiry (up to 15 min), blocking new sessions. No cleanup is performed before rethrowing.",
+    "fix": "In createSessionFromFile, wrap the call in try/catch and remove the session from #sessions before rethrowing: try { await this.#importCsv(session, filePath); return session; } catch (err) { this.#sessions.delete(csvQueryId); throw err; }"
+  },
+  {
+    "id": 2,
+    "title": "Path injection / path traversal in #importCsv",
+    "severity": "MEDIUM",
+    "file": "src/services/session-manager.js",
+    "description": "filePath is interpolated into raw SQL with only single-quote escaping. Paths containing backslash-escaped sequences or path traversal (e.g. '../../../etc/passwd') could read arbitrary files. createSessionFromFile accepts caller-controlled paths.",
+    "fix": "Resolve filePath to an absolute path and assert it is under TMP_DIR (or an allowed base): const resolved = resolve(filePath); if (!resolved.startsWith(resolve(TMP_DIR))) throw new Error('Path must be under tmp directory'); Use the resolved path in the query."
+  },
+  {
+    "id": 3,
+    "title": "Shutdown handler can run concurrently",
+    "severity": "HIGH",
+    "file": "src/server.js",
+    "description": "SIGTERM and SIGINT both call shutdown(). If the user sends SIGINT twice quickly or both signals arrive, shutdown runs concurrently. This can cause double destroyAll, double app.close(), and unpredictable behavior.",
+    "fix": "Add a guard: let shuttingDown = false; async function shutdown() { if (shuttingDown) return; shuttingDown = true; try { ... } finally { process.exit(0); } }"
+  },
+  {
+    "id": 4,
+    "title": "Shutdown does not exit process",
+    "severity": "MEDIUM",
+    "file": "src/server.js",
+    "description": "After shutdown completes, the process may not exit if other handles (timers, open connections) keep the event loop alive. The handler returns without calling process.exit().",
+    "fix": "Call process.exit(0) after successful shutdown, or process.exit(1) if shutdown fails. Ensure the exit happens in a finally block after the shutdown logic."
+  },
+  {
+    "id": 5,
+    "title": "destroyAll stops on first destroySession rejection",
+    "severity": "MEDIUM",
+    "file": "src/services/session-manager.js",
+    "description": "destroyAll uses Promise.all(ids.map(id => this.destroySession(id))). If any destroySession rejects (e.g., DuckDB close throws unexpectedly), the whole Promise.all rejects and remaining sessions may not be destroyed.",
+    "fix": "Use Promise.allSettled and log failures: const results = await Promise.allSettled(ids.map(id => this.destroySession(id))); results.forEach((r, i) => { if (r.status === 'rejected') this.#log.warn?.({ err: r.reason, id: ids[i] }, 'Failed to destroy session'); });"
+  },
+  {
+    "id": 6,
+    "title": "sweepExpired stops on first destroySession failure",
+    "severity": "LOW",
+    "file": "src/services/session-manager.js",
+    "description": "The for-loop awaits destroySession sequentially. If one throws, the loop breaks and remaining expired sessions are not swept. The interval callback has .catch(() => {}) so the error is swallowed.",
+    "fix": "Wrap each destroySession in try/catch: for (const id of expired) { try { await this.destroySession(id); } catch (e) { this.#log.warn?.({ err: e, id }, 'Failed to sweep expired session'); } }"
+  },
+  {
+    "id": 7,
+    "title": "OrgRegistry #save leaves orphan temp file on rename failure",
+    "severity": "MEDIUM",
+    "file": "src/services/org-registry.js",
+    "description": "If writeFile succeeds but rename fails (e.g., target on different mount, permissions, disk full mid-operation), the temp file is left orphaned and the in-memory state is not persisted. No cleanup or retry.",
+    "fix": "Wrap rename in try/catch, unlink the temp file on failure, and rethrow: try { await rename(tmpPath, this.#filePath); } catch (err) { await unlink(tmpPath).catch(() => {}); throw err; }"
+  },
+  {
+    "id": 8,
+    "title": "OrgRegistry in-memory/disk inconsistency on #save failure",
+    "severity": "HIGH",
+    "file": "src/services/org-registry.js",
+    "description": "register, remove, and rotateKey update in-memory state first, then call #save(). If #save() throws (disk full, permissions), in-memory state is updated but disk is not. On next load(), the old data is restored and changes are lost.",
+    "fix": "Either: (1) Save first to a temp file, then rename (atomic), and only update in-memory after successful save; or (2) On #save failure, revert in-memory state before rethrowing. Document that partial failures can leave inconsistent state."
+  },
+  {
+    "id": 9,
+    "title": "createWriteStream not checked for errors",
+    "severity": "MEDIUM",
+    "file": "src/services/sf-download.js",
+    "description": "createWriteStream(destPath) can fail if the directory does not exist or is not writable. The stream may not emit 'error' until the first write. If the parent directory was removed at runtime, pipeline could fail with an obscure error.",
+    "fix": "Ensure TMP_DIR exists before download (caller responsibility). Alternatively, use open() + createWriteStream with explicit error handling, or verify the directory exists in downloadContentVersion before creating the stream."
+  },
+  {
+    "id": 10,
+    "title": "Config parseInt values not validated",
+    "severity": "LOW",
+    "file": "src/config.js",
+    "description": "port, fetchTimeoutMs, ttlSeconds, maxConcurrentSessions, maxRowFetch, and maxCsvSizeBytes use parseInt without validation. Invalid env (e.g. PORT=abc) yields NaN, which can cause listen() to fail or use wrong limits.",
+    "fix": "Validate parsed values: if (isNaN(config.port) || config.port < 1 || config.port > 65535) throw new Error('Invalid PORT'); Similar checks for other numeric configs."
+  },
+  {
+    "id": 11,
+    "title": "Empty CSV / zero-row table edge case",
+    "severity": "INFO",
+    "file": "src/services/session-manager.js",
+    "description": "SELECT count(*) typically returns one row even for empty tables. Defensive check for getRows()[0] avoids theoretical throw if DuckDB behavior differs.",
+    "fix": "const rows = countResult.getRows(); session.rowCount = rows.length > 0 ? rows[0][0] : 0;"
+  },
+  {
+    "id": 12,
+    "title": "createSizeLimitTransform chunk.length for multi-byte strings",
+    "severity": "INFO",
+    "file": "src/services/sf-download.js",
+    "description": "chunk.length for strings is character count, not byte length. Fetch typically returns a byte stream (Buffer chunks), so this is usually correct. If the stream is in object mode or yields strings, length could undercount bytes.",
+    "fix": "For robustness, use Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding): bytesWritten += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding || 'utf8');"
+  },
+  {
+    "id": 13,
+    "title": "csv routes params schema missing required",
+    "severity": "LOW",
+    "file": "src/routes/csv.js",
+    "description": "The schema for params in /:csvQueryId/status, /:csvQueryId/rows, and /:csvQueryId/meta does not mark csvQueryId as required. Fastify may not validate presence, allowing undefined csvQueryId to reach handlers.",
+    "fix": "Add required: ['csvQueryId'] to params schema for each route that uses csvQueryId."
+  },
+  {
+    "id": 14,
+    "title": "createSession MAX_SESSIONS race window",
+    "severity": "LOW",
+    "file": "src/services/session-manager.js",
+    "description": "The size check and session creation are not atomic. Two concurrent createSession calls could both pass the check before either adds a session, exceeding maxConcurrentSessions by one.",
+    "fix": "Use a mutex/semaphore for createSession, or re-check size after set and remove the new session if over limit (with appropriate cleanup)."
+  },
+  {
+    "id": 15,
+    "title": "SfAuthManager clearToken does not abort pending auth",
+    "severity": "LOW",
+    "file": "src/services/sf-auth.js",
+    "description": "clearToken() sets accessToken and expiresAt to null/0 but does not clear or reject #pendingAuth. A failing in-flight authenticate() will still resolve/reject when done; the next getAccessToken will correctly trigger a new auth. Minor: a successful pending auth could overwrite the cleared token.",
+    "fix": "Optionally set #pendingAuth = null in clearToken so any in-flight auth is ignored on completion. Or document that clearToken is best called when no concurrent getAccessToken is in progress."
+  },
+  {
+    "id": 16,
+    "title": "queryRows no handling for closed/corrupted connection",
+    "severity": "MEDIUM",
+    "file": "src/services/session-manager.js",
+    "description": "If session.conn was closed externally or DuckDB is in a bad state, runAndReadAll can throw. The error propagates to the route handler (OK), but the session remains in the map with a dead connection. Subsequent queries will keep failing until TTL.",
+    "fix": "Wrap the query in try/catch; on connection-related errors, set session.status = 'error', session.error = {...}, and optionally remove conn/db references. Rethrow with a clear code like 'SESSION_CONNECTION_LOST'."
+  },
+  {
+    "id": 17,
+    "title": "sweepStaleTempFiles uses different tmp path than session-manager",
+    "severity": "MEDIUM",
+    "file": "src/server.js",
+    "description": "sweepStaleTempFiles uses join(process.cwd(), 'tmp') while SessionManager uses join(__dirname, '..', '..', 'tmp'). If the server is started from a different cwd, they may point to different directories, leaving actual session temp files uncleaned.",
+    "fix": "Use a single shared TMP_DIR constant (e.g. from config or a shared path module) for both sweepStaleTempFiles and SessionManager."
+  },
+  {
+    "id": 18,
+    "title": "auth plugin constantTimeEqual length leak",
+    "severity": "INFO",
+    "file": "src/plugins/auth.js",
+    "description": "Returning false immediately when bufA.length !== bufB.length can leak length information via timing. For fixed-length API keys this is negligible, but worth noting for security review.",
+    "fix": "For maximum safety, always run timingSafeEqual by padding to same length: if (bufA.length !== bufB.length) { timingSafeEqual(bufA, Buffer.alloc(bufB.length)); return false; }"
+  }
+]

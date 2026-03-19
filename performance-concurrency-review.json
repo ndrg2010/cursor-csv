@@ -1,0 +1,122 @@
+[
+  {
+    "id": 1,
+    "title": "DuckDB memory leak when destroySession races with #importCsv",
+    "severity": "CRITICAL",
+    "file": "src/services/session-manager.js",
+    "description": "When destroySession is called while #importCsv is running (after download, during DuckDB import), destroySession deletes the session from #sessions and closes conn/db (which are still null). #importCsv continues, creates a new DuckDB instance and connection, assigns them to session.db and session.conn. The session object is no longer in #sessions, so the DuckDB instance and connection are never closed. Each such race leaks memory and native resources.",
+    "fix": "Pass the abort signal into #importCsv and check it before/after each async step. On abort, close instance/conn before rethrowing. In destroySession, await a short delay or use a flag so #importCsv can detect destruction and avoid assigning to session after it has been removed. Alternatively, have #importCsv check session presence in #sessions before assigning db/conn."
+  },
+  {
+    "id": 2,
+    "title": "#importCsv does not support abort signal",
+    "severity": "HIGH",
+    "file": "src/services/session-manager.js",
+    "description": "#ingestInBackground passes signal to downloadContentVersion but not to #importCsv. If destroySession (abort) is called during the DuckDB import phase, the import continues to completion. This enables the critical leak in finding 1 and prevents timely cleanup.",
+    "fix": "Add signal parameter to #importCsv(session, filePath, signal). Check signal.aborted before and after each await. On abort, close instance and conn, then throw. Call #importCsv(session, tempFile, signal) from #ingestInBackground."
+  },
+  {
+    "id": 3,
+    "title": "Shutdown handler not awaited; process may exit before cleanup",
+    "severity": "CRITICAL",
+    "file": "src/server.js",
+    "description": "process.on('SIGTERM', shutdown) and process.on('SIGINT', shutdown) invoke shutdown() without awaiting it. The async shutdown function returns a Promise that is never awaited. The process can exit (or be killed by a second signal) before destroyAll() and app.close() complete, leaving DuckDB instances and connections open.",
+    "fix": "Await shutdown and guard against re-entry: let shuttingDown = false; async function shutdown() { if (shuttingDown) return; shuttingDown = true; try { sessionManager.stopCleanupInterval(); await sessionManager.destroyAll(); await app.close(); } finally { process.exit(0); } } Then: process.on('SIGTERM', () => shutdown()); process.on('SIGINT', () => shutdown());"
+  },
+  {
+    "id": 4,
+    "title": "Double shutdown when SIGTERM and SIGINT both fire",
+    "severity": "HIGH",
+    "file": "src/server.js",
+    "description": "SIGTERM and SIGINT both call shutdown(). If both signals arrive (e.g. user hits Ctrl+C twice, or container sends SIGTERM then SIGKILL), shutdown can run concurrently. This causes double destroyAll, double app.close(), and unpredictable behavior.",
+    "fix": "Add a guard at the start of shutdown: if (shuttingDown) return; shuttingDown = true; before any async work."
+  },
+  {
+    "id": 5,
+    "title": "maxConcurrentSessions check-then-act race",
+    "severity": "HIGH",
+    "file": "src/services/session-manager.js",
+    "description": "createSession and createSessionFromFile check this.#sessions.size >= max before adding. Two concurrent calls can both pass the check before either adds a session, exceeding maxConcurrentSessions by one or more. This defeats the intended resource limit.",
+    "fix": "Use a mutex or semaphore: async #withCreateLock(fn) { while (this.#createLock) await this.#createLock; let resolve; this.#createLock = new Promise(r => { resolve = r; }); try { return await fn(); } finally { this.#createLock = null; resolve(); } } Wrap the size check and session creation inside #withCreateLock."
+  },
+  {
+    "id": 6,
+    "title": "sweepExpired can destroy recently-touched sessions",
+    "severity": "MEDIUM",
+    "file": "src/services/session-manager.js",
+    "description": "sweepExpired collects expired IDs in one pass, then destroys each. A request can call touch() between the expiry check and destroySession(), extending expiresAt. sweepExpired still destroys that session because it uses the pre-collected ID list. Valid sessions can be incorrectly destroyed.",
+    "fix": "Re-check expiry immediately before destroy: for (const id of expired) { const s = this.#sessions.get(id); if (s && Date.now() > s.expiresAt) await this.destroySession(id); } Or use a lock around the sweep to prevent touch during the critical section."
+  },
+  {
+    "id": 7,
+    "title": "Concurrent queryRows on same DuckDB connection",
+    "severity": "MEDIUM",
+    "file": "src/services/session-manager.js",
+    "description": "Multiple requests can call queryRows for the same csvQueryId concurrently. All use session.conn.runAndReadAll() on the same connection. DuckDB connections are typically not safe for concurrent use; overlapping runAndReadAll calls can cause undefined behavior, corruption, or errors.",
+    "fix": "Serialize queries per session: add a per-session query queue or mutex. Before running the query, await a lock; release after. Example: session.queryLock = session.queryLock ?? Promise.resolve(); const prev = session.queryLock; let resolve; session.queryLock = new Promise(r => { resolve = r; }); try { await prev; return await session.conn.runAndReadAll(...); } finally { resolve(); }"
+  },
+  {
+    "id": 8,
+    "title": "Orphaned session on createSessionFromFile error",
+    "severity": "HIGH",
+    "file": "src/services/session-manager.js",
+    "description": "When #importCsv throws in createSessionFromFile (e.g. file not found, malformed CSV), the session remains in #sessions with status 'preparing'. It counts toward maxConcurrentSessions until TTL expiry (up to 15 min), blocking new sessions. No cleanup before rethrowing.",
+    "fix": "Wrap in try/catch and remove session on error: try { await this.#importCsv(session, filePath); return session; } catch (err) { this.#sessions.delete(csvQueryId); throw err; }"
+  },
+  {
+    "id": 9,
+    "title": "destroyAll stops on first destroySession rejection",
+    "severity": "MEDIUM",
+    "file": "src/services/session-manager.js",
+    "description": "destroyAll uses Promise.all(ids.map(id => this.destroySession(id))). If any destroySession rejects (e.g. DuckDB close throws), Promise.all rejects and remaining sessions may not be destroyed. During shutdown, this can leave leaked DuckDB instances.",
+    "fix": "Use Promise.allSettled: const results = await Promise.allSettled(ids.map(id => this.destroySession(id))); results.forEach((r, i) => { if (r.status === 'rejected') this.#log.warn?.({ err: r.reason, id: ids[i] }, 'Failed to destroy session'); });"
+  },
+  {
+    "id": 10,
+    "title": "OrgRegistry getOrgByApiKey reads shared state without lock",
+    "severity": "LOW",
+    "file": "src/services/org-registry.js",
+    "description": "getOrgByApiKey reads #orgs, #keyIndex, mutates record.lastUsedAt, and may add to #authManagers without holding #withLock. Concurrent register/remove/rotateKey can modify these structures. A caller may receive an org that is being removed, or lastUsedAt may be overwritten. Stale or inconsistent data possible.",
+    "fix": "Use a read-write lock or make getOrgByApiKey acquire a shared lock for the duration of the read and mutation. Alternatively, document that getOrgByApiKey is best-effort during mutations and accept minor races."
+  },
+  {
+    "id": 11,
+    "title": "TMP_DIR mismatch between server and SessionManager",
+    "severity": "MEDIUM",
+    "file": "src/server.js",
+    "description": "sweepStaleTempFiles uses join(process.cwd(), 'tmp') while SessionManager uses join(__dirname, '..', '..', 'tmp'). If the server is started from a different cwd, they point to different directories. Stale temp files from actual sessions may never be cleaned at startup.",
+    "fix": "Define a single TMP_DIR constant (e.g. in config or a shared path module) and use it in both server.js and session-manager.js."
+  },
+  {
+    "id": 12,
+    "title": "Cleanup interval callback swallows sweepExpired errors",
+    "severity": "LOW",
+    "file": "src/services/session-manager.js",
+    "description": "startCleanupInterval uses .catch(() => {}) on sweepExpired(). If sweepExpired throws (e.g. destroySession fails), the error is silently swallowed. Repeated failures prevent expired sessions from being cleaned, leading to unbounded session growth until maxConcurrentSessions blocks new sessions.",
+    "fix": "Log the error: .catch((err) => { this.#log.warn?.({ err }, 'Cleanup sweep failed'); }) so operators can detect and fix underlying issues."
+  },
+  {
+    "id": 13,
+    "title": "SfAuthManager clearToken does not invalidate #pendingAuth",
+    "severity": "LOW",
+    "file": "src/services/sf-auth.js",
+    "description": "clearToken() nulls accessToken and expiresAt but does not clear #pendingAuth. An in-flight authenticate() will still complete and overwrite the cleared token when it resolves. After a 401-triggered clearToken, a concurrent getAccessToken could receive a stale token from the old pending auth.",
+    "fix": "In clearToken(), set this.#pendingAuth = null so the in-flight auth is discarded on completion. Optionally reject #pendingAuth with a sentinel error so waiters get a clear 'token cleared' signal."
+  },
+  {
+    "id": 14,
+    "title": "Scalability: single in-memory DuckDB per session",
+    "severity": "INFO",
+    "file": "src/services/session-manager.js",
+    "description": "Each session holds a full DuckDB in-memory instance. With maxConcurrentSessions=10 and large CSVs, memory usage can be significant. DuckDB in-memory does not spill to disk. No horizontal scaling of session state across processes.",
+    "fix": "Document memory limits. Consider configurable maxCsvSizeBytes and maxConcurrentSessions based on available RAM. For multi-process scaling, sessions would need external storage (e.g. Redis) or sticky routing."
+  },
+  {
+    "id": 15,
+    "title": "Blocking read_csv_auto for large files",
+    "severity": "INFO",
+    "file": "src/services/session-manager.js",
+    "description": "#importCsv uses read_csv_auto which loads the entire CSV into DuckDB synchronously from the Node perspective (the DuckDB call blocks the event loop until the native operation completes). For very large files, this can block other requests.",
+    "fix": "DuckDB's Node API is largely synchronous for such operations. Consider worker threads for import if blocking becomes an issue, or document that large imports may temporarily increase latency for other requests."
+  }
+]

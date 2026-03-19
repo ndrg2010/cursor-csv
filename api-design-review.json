@@ -1,0 +1,162 @@
+[
+  {
+    "id": 1,
+    "title": "README misplaces /health under CSV Operations with auth requirement",
+    "severity": "INFO",
+    "file": "README.md",
+    "description": "The README table lists `GET /health` under 'CSV Operations (requires per-org X-API-Key)', but the health endpoint has no authentication. This misleads users into thinking an API key is required.",
+    "fix": "Move GET /health to a separate 'Health (no auth)' section or add a footnote clarifying it does not require authentication."
+  },
+  {
+    "id": 2,
+    "title": "Docker HEALTHCHECK has unhandled promise rejection",
+    "severity": "MEDIUM",
+    "file": "Dockerfile",
+    "description": "The healthcheck uses `fetch(...).then(r => { if (!r.ok) process.exit(1); })` without a `.catch()`. If fetch fails (e.g., connection refused, DNS error), the promise rejects and may not trigger process.exit(1), leaving the healthcheck in an ambiguous state.",
+    "fix": "Add `.catch(() => process.exit(1))` to handle fetch failures: `fetch('http://localhost:3000/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))`"
+  },
+  {
+    "id": 3,
+    "title": "Config validation allows NaN and invalid numeric values",
+    "severity": "MEDIUM",
+    "file": "src/config.js",
+    "description": "PORT, CSV_TTL_SECONDS, MAX_CONCURRENT_SESSIONS, MAX_ROW_FETCH, MAX_CSV_SIZE_BYTES, and SF_FETCH_TIMEOUT_MS use parseInt/Number without validation. Invalid env values (e.g., PORT=abc, CSV_TTL_SECONDS=-1) produce NaN or negative numbers, leading to undefined behavior.",
+    "fix": "Add range validation after parsing: ensure port is 1-65535, ttlSeconds/maxConcurrentSessions/maxRowFetch/maxCsvSizeBytes/fetchTimeoutMs are positive integers. Throw a clear error on invalid values."
+  },
+  {
+    "id": 4,
+    "title": "No CORS configuration",
+    "severity": "LOW",
+    "file": "src/server.js",
+    "description": "The server does not register @fastify/cors. If the API is called from a browser (e.g., a setup tab in a Salesforce app), cross-origin requests will be blocked by the browser.",
+    "fix": "If browser clients are expected, add @fastify/cors with appropriate origin/credentials configuration. If server-to-server only, document this and consider adding a minimal CORS handler for OPTIONS preflight if needed."
+  },
+  {
+    "id": 5,
+    "title": "Missing response schemas on most routes",
+    "severity": "LOW",
+    "file": "src/routes/csv.js, src/routes/orgs.js, src/routes/health.js",
+    "description": "Only POST /init has a response schema. GET /status, /rows, /meta, org list, rotate-key, and /health lack response schemas. This prevents Fastify from validating/serializing responses and documenting the API contract.",
+    "fix": "Add response schemas for all routes (e.g., 200, 404, 409) to enable response validation and OpenAPI documentation."
+  },
+  {
+    "id": 6,
+    "title": "format:uri may not be validated without ajv-formats",
+    "severity": "MEDIUM",
+    "file": "src/routes/orgs.js",
+    "description": "The org registration body uses `format: 'uri'` for loginUrl. Standard Ajv (used by Fastify) does not validate format keywords unless ajv-formats is registered. Invalid URLs (e.g., 'not-a-url') may pass validation.",
+    "fix": "Add @fastify/type-provider-json-schema or ensure ajv-formats is loaded for format validation. Alternatively, add a custom format validator or use a pattern that enforces URL structure."
+  },
+  {
+    "id": 7,
+    "title": "csvQueryId and orgId params lack format validation",
+    "severity": "LOW",
+    "file": "src/routes/csv.js, src/routes/orgs.js",
+    "description": "Route params :csvQueryId and :orgId have no minLength, pattern, or format constraints. Empty strings or unexpected values could reach handlers (though they would typically 404).",
+    "fix": "Add schema constraints: csvQueryId pattern `^cq_[a-f0-9]{32}$`, orgId pattern `^org_[a-f0-9]{8}$` to fail fast on invalid params."
+  },
+  {
+    "id": 8,
+    "title": "MAX_SESSIONS_REACHED (429) not tested at route level",
+    "severity": "LOW",
+    "file": "test/integration.test.js",
+    "description": "SessionManager.createSessionFromFile throws MAX_SESSIONS_REACHED when limit is reached, and this is tested in session-manager.test.js. The CSV route's POST /init path that calls createSession is not integration-tested for 429 when max sessions are reached.",
+    "fix": "Add an integration test that creates maxConcurrentSessions sessions via POST /init, then asserts the next init returns 429 with code MAX_SESSIONS_REACHED."
+  },
+  {
+    "id": 9,
+    "title": "Org registration validation not tested in integration",
+    "severity": "LOW",
+    "file": "test/integration.test.js",
+    "description": "POST /v1/orgs validation (invalid loginUrl, non-HTTPS, missing loginUrl, label too long) is not covered by integration tests. Unit tests cover org-registry behavior but not the HTTP layer validation.",
+    "fix": "Add integration tests for POST /v1/orgs with invalid body (e.g., loginUrl: 'http://insecure.com', loginUrl: 'not-a-url', missing loginUrl) and assert 400 responses."
+  },
+  {
+    "id": 10,
+    "title": "auth plugin production check not tested",
+    "severity": "LOW",
+    "file": "test/",
+    "description": "auth.js throws if ADMIN_API_KEY is missing in production, but there is no test that verifies this behavior. A regression could allow unauthenticated org management in production.",
+    "fix": "Add a unit test that instantiates the auth plugin with NODE_ENV=production and no adminApiKey, and asserts it throws."
+  },
+  {
+    "id": 11,
+    "title": "Error response shape inconsistent with validation errors",
+    "severity": "MEDIUM",
+    "file": "src/server.js",
+    "description": "The custom error handler sends { code, message, details }. Fastify/Ajv validation errors have a different structure (e.g., validation array). Clients may receive inconsistent error shapes for 400 validation vs 404/409/500 application errors.",
+    "fix": "Add a validation error handler or normalize validation errors in setErrorHandler to match the { code, message, details } shape (e.g., code: 'VALIDATION_ERROR', message: first error message, details: validation array)."
+  },
+  {
+    "id": 12,
+    "title": "No GET /v1/orgs/:orgId for single org",
+    "severity": "INFO",
+    "file": "src/routes/orgs.js",
+    "description": "The API supports list (GET /) and delete (DELETE /:orgId) but has no GET /:orgId to fetch a single org. Clients must list all orgs and filter if they need one org's details.",
+    "fix": "Add GET /v1/orgs/:orgId returning { orgId, label, loginUrl, registeredAt, lastUsedAt } or 404. Document in README."
+  },
+  {
+    "id": 13,
+    "title": "rows querystring integer coercion",
+    "severity": "LOW",
+    "file": "src/routes/csv.js",
+    "description": "The querystring schema expects start and count as integers. Query params arrive as strings. If Fastify/Ajv does not coerce, 'start=0&count=5' could fail validation. Integration tests pass, but behavior depends on Fastify defaults.",
+    "fix": "Explicitly enable coercion for the querystring schema (e.g., via Ajv options or coerceTypes) or document that clients must send numeric values. Verify with a test using string query params."
+  },
+  {
+    "id": 14,
+    "title": "contentVersionId pattern may reject valid 15-char IDs",
+    "severity": "LOW",
+    "file": "src/routes/csv.js",
+    "description": "Schema uses minLength: 15, maxLength: 18, pattern: '^068'. Salesforce ContentVersion IDs can be 15 or 18 characters. The pattern is correct; minLength 15 is correct. No issue if 18-char IDs are always used. Verify 15-char IDs (e.g., '068XXXXXXXXXXXX') are accepted.",
+    "fix": "Confirm 15-char ContentVersion IDs (068 + 12 chars) are valid. If so, no change. If 18-char only, consider tightening pattern to `^068[a-zA-Z0-9]{12,15}$` or similar."
+  },
+  {
+    "id": 15,
+    "title": "rotate-key success response schema missing",
+    "severity": "LOW",
+    "file": "src/routes/orgs.js",
+    "description": "POST /:orgId/rotate-key returns { apiKey } on success but has no response schema. The 404 path is handled manually; 200 response is undocumented.",
+    "fix": "Add response schema for 200: { type: 'object', properties: { apiKey: { type: 'string' } }, required: ['apiKey'] }."
+  },
+  {
+    "id": 16,
+    "title": "Real async init flow not covered by integration tests",
+    "severity": "MEDIUM",
+    "file": "test/integration.test.js",
+    "description": "Integration tests use createSessionFromFile to bypass Salesforce. The real flow (POST /init with contentVersionId, background download, status polling until ready) is not tested end-to-end. Background ingest failures and status transitions (preparing -> ready/error) are only partially covered.",
+    "fix": "Add an integration test that mocks sf-download (or uses a test ContentVersion) and exercises POST /init, polling GET /status until ready, then GET /rows. Alternatively, add a contract test with a mocked SF API."
+  },
+  {
+    "id": 17,
+    "title": "config.js has no unit tests",
+    "severity": "LOW",
+    "file": "test/",
+    "description": "Config loading, validation (LOG_LEVEL, required vars), and defaults are not unit tested. Invalid LOG_LEVEL or missing ECA vars throw at import time, but edge cases (e.g., PORT=0, negative numbers) are untested.",
+    "fix": "Add config.test.js that tests valid config, invalid LOG_LEVEL, missing required vars, and invalid numeric env values (with env isolation)."
+  },
+  {
+    "id": 18,
+    "title": "health route registered without prefix",
+    "severity": "INFO",
+    "file": "src/server.js",
+    "description": "Health is at /health while orgs and csv are at /v1/orgs and /v1/csv. For consistency and future versioning, health could be at /v1/health or /health. Current design is acceptable but differs from versioned routes.",
+    "fix": "Document the choice. Optionally move to /v1/health for consistency, or add a root / that redirects to /health for discoverability."
+  },
+  {
+    "id": 19,
+    "title": "docker-compose does not override MAX_CSV_SIZE_BYTES",
+    "severity": "INFO",
+    "file": "docker-compose.yml",
+    "description": "docker-compose sets DATA_DIR and NODE_ENV but not MAX_CSV_SIZE_BYTES, MAX_CONCURRENT_SESSIONS, or other csv/sf tuning. Defaults are used. For production, operators may want to tune these per deployment.",
+    "fix": "Document in README that these can be set via .env. Optionally add commented examples in docker-compose environment section."
+  },
+  {
+    "id": 20,
+    "title": "No API versioning strategy beyond URL prefix",
+    "severity": "INFO",
+    "file": "src/server.js",
+    "description": "API uses /v1/ prefix. There is no documented deprecation policy, version negotiation (e.g., Accept header), or migration path for future v2.",
+    "fix": "Document versioning policy in README: e.g., v1 supported for N months after v2 release, breaking changes require new version prefix."
+  }
+]

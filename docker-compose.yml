@@ -1,0 +1,25 @@
+services:
+  csv-middleware:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - DATA_DIR=/app/data
+      - TMP_DIR=/app/tmp
+      - NODE_OPTIONS=--max-old-space-size=2048
+    volumes:
+      - csv-tmp:/app/tmp
+      - csv-data:/app/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "2"
+
+volumes:
+  csv-tmp:
+  csv-data:
