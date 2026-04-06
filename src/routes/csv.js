@@ -16,9 +16,10 @@ async function csvRoutes(fastify) {
     schema: {
       body: {
         type: 'object',
-        required: ['contentVersionId'],
+        required: ['contentVersionId', 'cursorBatchJobId'],
         properties: {
           contentVersionId: { type: 'string', minLength: 15, maxLength: 18, pattern: '^068[a-zA-Z0-9]{12,15}$' },
+          cursorBatchJobId: { type: 'string', minLength: 15, maxLength: 18 },
         },
         additionalProperties: false,
       },
@@ -37,8 +38,8 @@ async function csvRoutes(fastify) {
       },
     },
   }, async (request, reply) => {
-    const { contentVersionId } = request.body;
-    const session = fastify.sessionManager.createSession(contentVersionId, request.org.sfAuth, request.org.orgId);
+    const { contentVersionId, cursorBatchJobId } = request.body;
+    const session = fastify.sessionManager.createSession(contentVersionId, request.org.sfAuth, request.org.orgId, cursorBatchJobId);
 
     reply.code(202).send({
       csvQueryId: session.csvQueryId,

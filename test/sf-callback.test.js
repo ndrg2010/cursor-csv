@@ -14,6 +14,7 @@ function makeSession(overrides = {}) {
   return {
     csvQueryId: 'cq_abc123def456abc123def456abc123de',
     contentVersionId: '068TESTXXXXXXXX',
+    cursorBatchJobId: 'a1fPV000008hHgxYAE',
     orgId: 'org_test01',
     status: 'ready',
     rowCount: 42,
@@ -60,9 +61,10 @@ describe('SfCallbackService', () => {
       assert.equal(opts.headers['Content-Type'], 'application/json');
 
       const body = JSON.parse(opts.body);
-      assert.equal(body.Job_Record_Id__c, session.csvQueryId);
+      assert.equal(body.Job_Record_Id__c, session.cursorBatchJobId);
       assert.equal(body.Coordinator_Class__c, 'CSV_Ready');
-      assert.equal(Object.keys(body).length, 2, 'Payload should only contain two fields');
+      assert.equal(body.Job_Name__c, session.csvQueryId);
+      assert.equal(Object.keys(body).length, 3, 'Payload should only contain three fields');
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -88,9 +90,10 @@ describe('SfCallbackService', () => {
       await service.publish(sfAuth, session);
 
       const body = JSON.parse(globalThis.fetch.mock.calls[0].arguments[1].body);
-      assert.equal(body.Job_Record_Id__c, session.csvQueryId);
+      assert.equal(body.Job_Record_Id__c, session.cursorBatchJobId);
       assert.equal(body.Coordinator_Class__c, 'CSV_Ready');
-      assert.equal(Object.keys(body).length, 2, 'Payload should only contain two fields');
+      assert.equal(body.Job_Name__c, session.csvQueryId);
+      assert.equal(Object.keys(body).length, 3, 'Payload should only contain three fields');
     } finally {
       globalThis.fetch = originalFetch;
     }

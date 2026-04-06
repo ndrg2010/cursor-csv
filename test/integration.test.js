@@ -155,7 +155,7 @@ describe('Integration tests', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/v1/csv/init',
-        payload: { contentVersionId: '068XXXXXXXXXXXX' },
+        payload: { contentVersionId: '068XXXXXXXXXXXX', cursorBatchJobId: 'a1fTEST000000001' },
       });
       assert.equal(res.statusCode, 401);
     });
@@ -165,7 +165,7 @@ describe('Integration tests', () => {
         method: 'POST',
         url: '/v1/csv/init',
         headers: { 'x-api-key': 'wrong-key' },
-        payload: { contentVersionId: '068XXXXXXXXXXXX' },
+        payload: { contentVersionId: '068XXXXXXXXXXXX', cursorBatchJobId: 'a1fTEST000000001' },
       });
       assert.equal(res.statusCode, 403);
     });
@@ -187,7 +187,7 @@ describe('Integration tests', () => {
         method: 'POST',
         url: '/v1/csv/init',
         headers: { 'x-api-key': orgApiKey },
-        payload: { contentVersionId: 'short' },
+        payload: { contentVersionId: 'short', cursorBatchJobId: 'a1fTEST000000001' },
       });
       assert.equal(res.statusCode, 400);
     });
@@ -360,7 +360,7 @@ describe('Integration tests', () => {
 
     it('should prevent Org B from accessing sessions created by Org A', async () => {
       const org = app.orgRegistry.getOrgByApiKey(orgApiKey);
-      const session = app.sessionManager.createSession('068XXXXXXXXXXXX', org.sfAuth, org.orgId);
+      const session = app.sessionManager.createSession('068XXXXXXXXXXXX', org.sfAuth, org.orgId, 'a1fTEST000000001');
 
       // Org A can see its session
       const resA = await app.inject({
@@ -383,7 +383,7 @@ describe('Integration tests', () => {
 
     it('should prevent Org B from deleting sessions owned by Org A', async () => {
       const org = app.orgRegistry.getOrgByApiKey(orgApiKey);
-      const session = app.sessionManager.createSession('068XXXXXXXXXXXX', org.sfAuth, org.orgId);
+      const session = app.sessionManager.createSession('068XXXXXXXXXXXX', org.sfAuth, org.orgId, 'a1fTEST000000002');
 
       const resB = await app.inject({
         method: 'DELETE',

@@ -12,6 +12,7 @@ const ERROR_SESSION_TTL_MS = 60_000;
  * @typedef {Object} Session
  * @property {string} csvQueryId
  * @property {string} contentVersionId
+ * @property {string} cursorBatchJobId
  * @property {SessionStatus} status
  * @property {number} rowCount
  * @property {string[]} headers
@@ -104,8 +105,9 @@ export class SessionManager {
    * @param {string} contentVersionId
    * @param {import('./sf-auth.js').SfAuthManager} sfAuth
    * @param {string} [orgId]
+   * @param {string} [cursorBatchJobId]
    */
-  createSession(contentVersionId, sfAuth, orgId) {
+  createSession(contentVersionId, sfAuth, orgId, cursorBatchJobId) {
     const existing = this.#findExistingSession(contentVersionId, orgId);
     if (existing) {
       this.touch(existing.csvQueryId);
@@ -126,6 +128,7 @@ export class SessionManager {
     const session = {
       csvQueryId,
       contentVersionId,
+      cursorBatchJobId: cursorBatchJobId || null,
       orgId: orgId || null,
       status: 'preparing',
       rowCount: 0,

@@ -34,8 +34,9 @@ export class SfCallbackService {
     if (orgId && this.#orgsDenied.has(orgId)) return;
 
     const payload = {
-      Job_Record_Id__c: session.csvQueryId,
+      Job_Record_Id__c: session.cursorBatchJobId,
       Coordinator_Class__c: COORDINATOR_CLASS,
+      Job_Name__c: session.csvQueryId,
     };
 
     try {
